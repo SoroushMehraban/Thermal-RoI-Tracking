@@ -1,4 +1,4 @@
-# Thermal Processing
+# Thermal RoI Tracking
 This repository contains a GUI program that can:
 - Load thermal videos captured using FLIR camera.
 - User can create an oval on first frame of the video, containing region of interest

@@ -15,7 +15,7 @@ from model_utils import online_model_init, online_model_predict, convert_points_
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("Thermal Processing")
+        self.root.title("Thermal RoI Tracking")
         self.root.configure(bg='#0C0C0C')
         x = (self.root.winfo_screenwidth() // 2) - ((400) // 2)
         y = (self.root.winfo_screenheight() // 3) - ((200) // 2)
