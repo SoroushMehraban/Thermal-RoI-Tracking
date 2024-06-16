@@ -59,7 +59,7 @@ class App:
         video.unit = fnv.Unit.TEMPERATURE_FACTORY
         height = video.height
         width = video.width
-        n_frames = 3
+        n_frames = video.num_frames
         self.video_data = np.zeros((n_frames, height, width))
 
         for i in range(n_frames):
