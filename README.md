@@ -5,10 +5,13 @@ This repository contains a GUI program that can:
 - The program uses a point tracking model (tapnet) to track the oval throughout the video
 - It computes average values within RoI throughout the video and user can export it as excel file, and a scatter plot.
 ## Installation
+**Note**: The project is tested on **Python 3.9**. It **might** work if you have python > 3.9 but definitily does not work if you have python < 3.9.
+
+
 Download the FLIR SDK from [the official website](https://flir.custhelp.com/app/account/fl_download_software). After visiting the website, you have to:
 - First select **SDK (Software Development Kits)**
 - Then select **FLIR Science file SDK**
-- Then install the SDK based on the OS you have.
+- Then install the SDK for the windows.
 
 **Windows users**: Once you download the SDK file, there is a `.exe` file inside the compressed file you downloaded. Install it but remember the path you choose. After installation, if you choose the default path, then you can go to `C:\Program Files\FLIR Systems\sdks\file\python` to see where you can install SDK for python.  
 For installing it, you have to run the command prompt as adiministrator from the search bar menu:
