@@ -1,19 +1,19 @@
-from tapnet.utils import model_utils
-import jax
+import torch
+import torch.nn.functional as F
+from tapnet.torch import tapir_model
 import numpy as np
 from tapnet.utils import transforms
-from tapnet import tapir_model
 
-checkpoint_path = 'tapnet/checkpoints/causal_bootstapir_checkpoint.npy'
-ckpt_state = np.load(checkpoint_path, allow_pickle=True).item()
-params, state = ckpt_state['params'], ckpt_state['state']
-kwargs = dict(use_causal_conv=True, bilinear_interp_with_depthwise_conv=False, pyramid_level=0)
-kwargs.update(dict(
-    pyramid_level=1,
-    extra_convs=True,
-    softmax_temperature=10.0
-))
-tapir = tapir_model.ParameterizedTAPIR(params, state, tapir_kwargs=kwargs)
+if torch.cuda.is_available():
+  device = torch.device('cuda')
+else:
+  device = torch.device('cpu')
+
+checkpoint_path = 'tapnet/checkpoints/bootstapir_checkpoint_v2.pt'
+ckpt = torch.load(checkpoint_path)
+model = tapir_model.TAPIR(pyramid_level=1)
+model.load_state_dict(ckpt)
+model = model.to(device)
 
 
 def convert_points_to_query_points(frame, points, scale_actor, height, width, resize_height, resize_width):
@@ -32,43 +32,38 @@ def convert_points_to_query_points(frame, points, scale_actor, height, width, re
                                 coordinate_format='tyx')
     return query_points
 
-def online_model_init(frames, query_points):
-    """Initialize query features for the query points."""
-    frames = model_utils.preprocess_frames(frames)
-    feature_grids = tapir.get_feature_grids(frames, is_training=False)
-    query_features = tapir.get_query_features(
-        frames,
-        is_training=False,
-        query_points=query_points,
-        feature_grids=feature_grids,
-    )
-    return query_features
 
-online_model_init=jax.jit(online_model_init)
+def preprocess_frames(frames):
+  """Preprocess frames to model inputs.
 
-def online_model_predict(frames, query_features, causal_context):
-    """Compute point tracks and occlusions given frames and query points."""
-    frames = model_utils.preprocess_frames(frames)
-    feature_grids = tapir.get_feature_grids(frames, is_training=False)
-    trajectories = tapir.estimate_trajectories(
-        frames.shape[-3:-1],
-        is_training=False,
-        feature_grids=feature_grids,
-        query_features=query_features,
-        query_points_in_video=None,
-        query_chunk_size=64,
-        causal_context=causal_context,
-        get_causal_context=True,
-    )
-    causal_context = trajectories['causal_context']
-    del trajectories['causal_context']
-    # Take only the predictions for the final resolution.
-    # For running on higher resolution, it's typically better to average across
-    # resolutions.
-    tracks = trajectories['tracks'][-1]
-    occlusions = trajectories['occlusion'][-1]
-    uncertainty = trajectories['expected_dist'][-1]
-    visibles = model_utils.postprocess_occlusions(occlusions, uncertainty)
-    return tracks, visibles, causal_context
+  Args:
+    frames: [num_frames, height, width, 3], [0, 255], np.uint8
 
-online_model_predict=jax.jit(online_model_predict)
+  Returns:
+    frames: [num_frames, height, width, 3], [-1, 1], np.float32
+  """
+  frames = frames.float()
+  frames = frames / 255 * 2 - 1
+  return frames
+
+
+def postprocess_occlusions(occlusions, expected_dist):
+  visibles = (1 - F.sigmoid(occlusions)) * (1 - F.sigmoid(expected_dist)) > 0.5
+  return visibles
+
+
+def inference(frames, query_points):
+  # Preprocess video to match model inputs format
+  frames = preprocess_frames(frames)
+  num_frames, height, width = frames.shape[0:3]
+  query_points = query_points.float()
+  frames, query_points = frames[None], query_points[None]
+
+  # Model inference
+  with torch.no_grad():
+    outputs = model(frames, query_points)
+  tracks, occlusions, expected_dist = outputs['tracks'][0], outputs['occlusion'][0], outputs['expected_dist'][0]
+
+  # Binarize occlusions
+  visibles = postprocess_occlusions(occlusions, expected_dist)
+  return tracks, visibles

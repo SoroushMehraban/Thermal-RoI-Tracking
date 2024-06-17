@@ -1,6 +1,3 @@
-jax[cpu]==0.4.13 --find-links https://whls.blob.core.windows.net/unstable/index.html
-chex
-dm-haiku==0.0.9
 scipy==1.12.0
 pandas
 openpyxl

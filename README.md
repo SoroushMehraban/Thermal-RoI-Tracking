@@ -29,5 +29,15 @@ After installation of SDKs, install the dependancies related to python program b
 pip install -r requirements.txt
 pip install -r tapnet/requirements_inference.txt
 ```
+Also install the torch if you haven't already based on the instructions provided in [official website](https://pytorch.org/get-started/locally/).
 
-Finally, download the checkpoints for point tracking [from here](https://storage.googleapis.com/dm-tapnet/bootstap/bootstapir_checkpoint_v2.npy) and place it under `tapnet/checkpoints` directory.
+Finally, download the checkpoints for point tracking [from here](https://storage.googleapis.com/dm-tapnet/bootstap/bootstapir_checkpoint_v2.pt) and place it under `tapnet/checkpoints` directory.
+
+## Usage
+```
+python main.py
+```
+In case you have a strong GPU and want to process faster, you can increase the batch size (default is 16):
+```
+python main.py --batch-size 64
+```

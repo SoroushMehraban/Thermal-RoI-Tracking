@@ -4,22 +4,24 @@ from PIL import Image, ImageTk
 import pandas as pd
 import threading
 import numpy as np
+import torch
 import sys
 import os
 import fnv.file
 import mediapy as media
 from tapnet.utils import transforms
 from roi_utils import extract_roi_values, draw_roi_plot
-from model_utils import online_model_init, online_model_predict, convert_points_to_query_points, tapir
+from model_utils import inference, convert_points_to_query_points, model, device
 
 class App:
-    def __init__(self, root):
+    def __init__(self, root, batch_size):
         self.root = root
+        self.batch_size = batch_size
         self.root.title("Thermal RoI Tracking")
         self.root.configure(bg='#0C0C0C')
         x = (self.root.winfo_screenwidth() // 2) - ((400) // 2)
         y = (self.root.winfo_screenheight() // 3) - ((200) // 2)
-        self.root.geometry(f"400x200+{x}+{y}")
+        self.root.geometry(f"500x200+{x}+{y}")
 
         self.file_button = self.file_button_init()
         self.progress_bar = self.progress_bar_init()
@@ -71,19 +73,23 @@ class App:
 
             video.get_frame(i)
             self.video_data[i] = np.array(video.final, copy=False).reshape((height, width))
-
-        self.normalized_video_data = self.normalize_video()
+        
         self.progress_label.grid_remove()
         self.progress_bar.grid_remove()
         self.show_video_first_frame()
     
-    def normalize_video(self):
-        normalized_video_data = (self.video_data - np.min(self.video_data)) /\
-                                (np.max(self.video_data) - np.min(self.video_data)) * 255
-        normalized_video_data = normalized_video_data.astype(np.uint8)
+    def normalize_frame(self, frame):
+        if not hasattr(self, 'min_video_data'):
+            self.min_video_data = np.min(self.video_data)
+        if not hasattr(self, 'max_video_data'):
+            self.max_video_data = np.max(self.video_data)
 
-        normalized_video_data = np.stack([normalized_video_data] * 3, axis=-1)
-        return normalized_video_data
+        normalized_frame = (frame - self.min_video_data) /\
+                                (self.max_video_data - self.min_video_data) * 255
+        normalized_frame = normalized_frame.to(torch.uint8)
+
+        normalized_frame = torch.stack([normalized_frame] * 3, dim=-1)
+        return normalized_frame
 
     def show_video_first_frame(self):
         # Buttons
@@ -98,8 +104,8 @@ class App:
         self.process_button.grid(row=2, column=0, padx=100, sticky="ew")
 
         # First frame display
-        first_frame = self.normalized_video_data[0]
-        first_frame = Image.fromarray(first_frame)
+        first_frame = self.normalize_frame(torch.tensor(self.video_data[0]))
+        first_frame = Image.fromarray(first_frame.numpy())
         self.width, self.height = first_frame.size
         visualization_width = 800
         self.scale_factor = int(np.ceil(visualization_width / self.width)) if visualization_width / self.width < 2 else int(visualization_width / self.width)
@@ -134,46 +140,53 @@ class App:
             self.canvas.delete(self.current_oval)
             self.current_oval = None
     
-    def track_points(self, points):
+    def track_points(self, POINTS):
         resize_height, resize_width = 256, 256
-        query_points = convert_points_to_query_points(0, points, self.scale_factor,
+        query_points = convert_points_to_query_points(0, POINTS, self.scale_factor,
                                                         self.height, self.width,
                                                         resize_height, resize_width)
-        frames = media.resize_video(self.normalized_video_data, (resize_height, resize_width))
-        query_features = online_model_init(frames[None, 0:1], query_points[None])
-        causal_state = tapir.construct_initial_causal_state(query_points.shape[0],
-                                                                    len(query_features.resolutions) - 1)
+        query_points = torch.tensor(query_points).to(device)
+
         predictions = []
         tracked_ovals = []
-        for i in range(frames.shape[0]):
-            # Note: we add a batch dimension.
-            tracks, visibles, causal_state = online_model_predict(
-                frames=frames[None, i:i+1],
-                query_features=query_features,
-                causal_context=causal_state,
-            )
-            tracks = np.squeeze(tracks)
-            visibles = np.squeeze(visibles)
+        for i in range(0, self.video_data.shape[0], self.batch_size):
+            frames = media.resize_video(self.video_data[i:i+self.batch_size], (resize_height, resize_width))
+            frames = torch.tensor(frames).to(device)
+            if i == 0:
+                first_frame = frames[0].unsqueeze(0)
+            else:
+                frames = torch.cat([first_frame, frames], dim=0)
+            tracks, visibles = inference(self.normalize_frame(frames), query_points)
+
+            POINTS, BATCH_FRAMES, XY = 0, 1, 2
+            tracks = torch.squeeze(tracks).permute(BATCH_FRAMES, POINTS, XY).cpu().numpy()
+            visibles = torch.squeeze(visibles).permute(BATCH_FRAMES, POINTS).cpu().numpy()
+            
             tracks = transforms.convert_grid_coordinates(tracks,
                                                         (resize_width, resize_height),
                                                         (self.width, self.height))
+            if i > 0:
+                tracks = tracks[1:]
+                visibles = visibles[1:]
             predictions.append({'tracks':tracks, 'visibles':visibles})
 
             # Update GUI
             if i == 0:
                 self.canvas.grid()
-                self.canvas.config(width=self.normalized_video_data.shape[2],
-                                   height=self.normalized_video_data.shape[1])
+                self.canvas.config(width=self.video_data.shape[2],
+                                   height=self.video_data.shape[1])
                 self.progress_bar.grid_configure(pady=(10, 10))
 
-                canvas_width = self.normalized_video_data.shape[2]
-                canvas_height = self.normalized_video_data.shape[1]
+                canvas_width = self.video_data.shape[2]
+                canvas_height = self.video_data.shape[1]
 
                 x = (self.root.winfo_screenwidth() // 2) - ((canvas_width+200) // 2)
                 y = (self.root.winfo_screenheight() // 3) - ((canvas_height + 200) // 2)
                 self.root.geometry(f"{canvas_width+200}x{canvas_height + 200}+{x}+{y}")
 
-            self.photo = ImageTk.PhotoImage(Image.fromarray(self.normalized_video_data[i]))
+            effective_batch_size = tracks.shape[0] -1 if i > 0 else tracks.shape[0]
+            last_frame_batch = torch.tensor(self.video_data[i + effective_batch_size - 1])
+            self.photo = ImageTk.PhotoImage(Image.fromarray(self.normalize_frame(last_frame_batch).numpy()))
             self.canvas.itemconfig(self.image_on_canvas, image=self.photo)
             
             if self.current_oval is not None:
@@ -183,19 +196,22 @@ class App:
                     self.canvas.delete(tracked_oval)
                 tracked_ovals = []
 
-            min_x, min_y = np.min(tracks, axis=0)
-            max_x, max_y = np.max(tracks, axis=0)
+            min_x, min_y = np.min(tracks[-1], axis=0)
+            max_x, max_y = np.max(tracks[-1], axis=0)
             self.current_oval = self.canvas.create_oval(min_x, min_y, max_x, max_y, outline='red')
-            for (x, y) in tracks:
+            for (x, y) in tracks[-1]:
                 tracked_oval = self.canvas.create_oval(x-2, y-2, x+2, y+2, outline='blue', fill='blue')
                 tracked_ovals.append(tracked_oval)
 
-            self.progress_bar['value'] = (i + 1) / frames.shape[0] * 100
-            self.progress_label.config(text=f"Processed frames {i + 1}/{frames.shape[0]}",
+            self.progress_bar['value'] = (i + 1) / self.video_data.shape[0] * 100
+            self.progress_label.config(text=f"Processed frames {i + 1}/{self.video_data.shape[0]}",
                                        bg=self.root.cget('bg'),
                                        fg='white')
-        self.tracks = np.array([x['tracks'] for x in predictions])
-        self.visibles = np.array([x['visibles'] for x in predictions])
+
+        self.tracks = np.concatenate([x['tracks'] for x in predictions])
+        self.visibles = np.concatenate([x['visibles'] for x in predictions])
+
+        print(self.tracks.shape, self.visibles.shape)
         
         self.progress_bar.grid_remove()
         self.progress_label.grid_remove()
@@ -209,10 +225,12 @@ class App:
 
             if not hasattr(self, 'roi'):
                 self.roi = extract_roi_values(self.video_data, self.tracks)
+                self.visibles = np.sum(self.visibles, axis=1) > 2
             frames = [i for i in range(self.video_data.shape[0])]
             df = pd.DataFrame({
                 'Frame': frames,
                 'RoI': self.roi,
+                'Visible': self.visibles
             })
             file_name = os.path.join(folder_selected, 'out.xlsx')
             count = 1
@@ -253,7 +271,8 @@ class App:
 
             if not hasattr(self, 'roi'):
                 self.roi = extract_roi_values(self.video_data, self.tracks)
-            frames = [i for i in range(self.video_data.shape[0])]
+                self.visibles = np.sum(self.visibles, axis=1) > 2
+            frames = np.array([i for i in range(self.video_data.shape[0])])
 
             file_name = os.path.join(folder_selected, 'roi.png')
             count = 1
@@ -264,7 +283,7 @@ class App:
                 else:
                     break
             
-            draw_roi_plot(frames, self.roi, file_name)
+            draw_roi_plot(frames, self.roi, self.visibles, file_name)
             self.in_progress.grid_remove()
             self.button_save_scatter.configure(bg='#5ced73', fg='black', text='Scatter saved', state='disabled')
 

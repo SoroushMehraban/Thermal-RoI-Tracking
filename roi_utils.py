@@ -26,14 +26,18 @@ def extract_roi_values(video, tracks):
         roi = video[frame] * mask
         roi_average = np.sum(roi) / (roi != 0).sum()
         values.append(roi_average)
-    return values
+    return np.array(values)
 
 
-def draw_roi_plot(frames, values, out):
+def draw_roi_plot(frames, values, visibles, out):
     fig, ax = plt.subplots()
-    ax.scatter(frames, values, s=1)
+    for visible in [0, 1]:
+        ax.scatter(frames[visibles == visible], values[visibles == visible], 
+                   s=1, c='blue' if visible else 'red', 
+                   label='Visible' if visible else 'Not Visible')
     ax.set_xlabel('Frames')
     ax.set_ylabel('RoI Avg')
     ax.set_title(f'Average RoI throughout the video')
+    ax.legend()
     plt.savefig(out)
     plt.close()
