@@ -16,10 +16,10 @@ def create_oval_mask(array_shape, center, semi_major_axis, semi_minor_axis):
     return mask
 
 
-def extract_roi_values(video, tracks):
+def extract_roi_values(video, tracks, start_idx):
     values = []
-    for frame in range(video.shape[0]):
-        points = tracks[frame]
+    for frame in range(start_idx, video.shape[0]):
+        points = tracks[frame - start_idx]
 
         x_center, y_center, height, width = fit_oval(points)
         mask = create_oval_mask(video.shape[1:], (x_center, y_center), width / 2, height / 2)

@@ -13,6 +13,14 @@ from tapnet.utils import transforms
 from roi_utils import extract_roi_values, draw_roi_plot
 from model_utils import inference, convert_points_to_query_points, model, device
 
+
+def validate_integer(P):
+    if P.isdigit() or P == "":
+        return True
+    else:
+        return False
+            
+
 class App:
     def __init__(self, root, batch_size):
         self.root = root
@@ -103,7 +111,26 @@ class App:
                                    bd=3, relief='raised')
         self.process_button.grid(row=2, column=0, padx=100, sticky="ew")
 
+        vcmd = (self.root.register(validate_integer), '%P')
+
+        self.jump_container = tk.Frame(self.root)
+        self.jump_container.grid(row=3, column=0, padx=100, sticky="ew")
+
+        self.entry_label = tk.Label(self.jump_container, text=f"Frame: (0-{self.video_data.shape[0] - 1})",  bg=self.root.cget('bg'),
+                                   fg='White', font=('Helvetica', 12, 'bold'))
+        self.entry_label.pack(side="left")
+        
+        self.integer_entry = tk.Entry(self.jump_container, font=('Helvetica', 12), validate='key', validatecommand=vcmd)
+        self.integer_entry.insert(0, "0")
+        self.integer_entry.pack(side="left", fill="x", expand=True)
+
+        self.jump_button = tk.Button(self.jump_container, text="Jump", command=self.jump_frame,
+                                     bg='#FFD500', fg='black', font=('Helvetica', 12, 'bold'),
+                                     bd=3, relief='raised')
+        self.jump_button.pack(side="left")
+
         # First frame display
+        self.start_frame_idx = 0
         first_frame = self.normalize_frame(torch.tensor(self.video_data[0]))
         first_frame = Image.fromarray(first_frame.numpy())
         self.width, self.height = first_frame.size
@@ -135,6 +162,28 @@ class App:
         y = (self.root.winfo_screenheight() // 2) - ((canvas_height + button_heights + 200) // 2)
         self.root.geometry(f"{canvas_width+200}x{canvas_height + button_heights + 200}+{x}+{y}")
     
+    def jump_frame(self):
+        try:
+            value = int(self.integer_entry.get())
+            if value > self.video_data.shape[0] - 1:
+                print(f"[ERROR] Value is larger than max frames ({self.video_data.shape[0] - 1})")
+
+            selected_frame = self.normalize_frame(torch.tensor(self.video_data[value]))
+            selected_frame = Image.fromarray(selected_frame.numpy())
+            self.width, self.height = selected_frame.size
+            visualization_width = 800
+            self.scale_factor = int(np.ceil(visualization_width / self.width)) if visualization_width / self.width < 2 else int(visualization_width / self.width)
+            visualization_width = self.width * self.scale_factor
+            visualization_height = self.height * self.scale_factor
+            selected_frame = selected_frame.resize((visualization_width, visualization_height))
+            self.photo = ImageTk.PhotoImage(image=selected_frame)
+            self.canvas.itemconfig(self.image_on_canvas, image=self.photo)
+
+            self.start_frame_idx = value
+        except ValueError:
+            print("[ERROR] Invalid input. Please enter an integer.")
+            return None
+        
     def clear_oval(self):
         if self.current_oval:
             self.canvas.delete(self.current_oval)
@@ -149,10 +198,10 @@ class App:
 
         predictions = []
         tracked_ovals = []
-        for i in range(0, self.video_data.shape[0], self.batch_size):
+        for i in range(self.start_frame_idx, self.video_data.shape[0], self.batch_size):
             frames = media.resize_video(self.video_data[i:i+self.batch_size], (resize_height, resize_width))
             frames = torch.tensor(frames).to(device)
-            if i == 0:
+            if i == self.start_frame_idx:
                 first_frame = frames[0].unsqueeze(0)
             else:
                 frames = torch.cat([first_frame, frames], dim=0)
@@ -165,13 +214,16 @@ class App:
             tracks = transforms.convert_grid_coordinates(tracks,
                                                         (resize_width, resize_height),
                                                         (self.width, self.height))
-            if i > 0:
+            if i > self.start_frame_idx:
                 tracks = tracks[1:]
                 visibles = visibles[1:]
-            predictions.append({'tracks':tracks, 'visibles':visibles})
+
+            effective_batch_size = tracks.shape[0]
+            predictions.append({'tracks':tracks, 'visibles':visibles,
+                                'frame_indices': np.arange(i, i + effective_batch_size)})
 
             # Update GUI
-            if i == 0:
+            if i == self.start_frame_idx:
                 self.canvas.grid()
                 self.canvas.config(width=self.video_data.shape[2],
                                    height=self.video_data.shape[1])
@@ -184,11 +236,10 @@ class App:
                 y = (self.root.winfo_screenheight() // 3) - ((canvas_height + 200) // 2)
                 self.root.geometry(f"{canvas_width+200}x{canvas_height + 200}+{x}+{y}")
 
-            effective_batch_size = tracks.shape[0] -1 if i > 0 else tracks.shape[0]
             last_frame_batch = torch.tensor(self.video_data[i + effective_batch_size - 1])
             self.photo = ImageTk.PhotoImage(Image.fromarray(self.normalize_frame(last_frame_batch).numpy()))
             self.canvas.itemconfig(self.image_on_canvas, image=self.photo)
-            
+
             if self.current_oval is not None:
                 self.canvas.delete(self.current_oval)
             if len(tracked_ovals) > 0:
@@ -203,15 +254,16 @@ class App:
                 tracked_oval = self.canvas.create_oval(x-2, y-2, x+2, y+2, outline='blue', fill='blue')
                 tracked_ovals.append(tracked_oval)
 
-            self.progress_bar['value'] = (i + 1) / self.video_data.shape[0] * 100
-            self.progress_label.config(text=f"Processed frames {i + 1}/{self.video_data.shape[0]}",
+            self.progress_bar['value'] = (i + 1 - self.start_frame_idx) / (self.video_data.shape[0] - self.start_frame_idx) * 100
+            self.progress_label.config(text=f"Processed frames {i + 1 - self.start_frame_idx}/{(self.video_data.shape[0] - self.start_frame_idx)}",
                                        bg=self.root.cget('bg'),
                                        fg='white')
 
         self.tracks = np.concatenate([x['tracks'] for x in predictions])
         self.visibles = np.concatenate([x['visibles'] for x in predictions])
+        self.frame_indices = np.concatenate([x['frame_indices'] for x in predictions])
 
-        print(self.tracks.shape, self.visibles.shape)
+        # print(self.tracks.shape, self.visibles.shape, self.frame_indices.shape)
         
         self.progress_bar.grid_remove()
         self.progress_label.grid_remove()
@@ -226,9 +278,8 @@ class App:
             if not hasattr(self, 'roi'):
                 self.roi = extract_roi_values(self.video_data, self.tracks)
                 self.visibles = np.sum(self.visibles, axis=1) > 2
-            frames = [i for i in range(self.video_data.shape[0])]
             df = pd.DataFrame({
-                'Frame': frames,
+                'Frame': self.frame_indices,
                 'RoI': self.roi,
                 'Visible': self.visibles
             })
@@ -270,9 +321,8 @@ class App:
             self.in_progress.grid()
 
             if not hasattr(self, 'roi'):
-                self.roi = extract_roi_values(self.video_data, self.tracks)
+                self.roi = extract_roi_values(self.video_data, self.tracks, self.start_frame_idx)
                 self.visibles = np.sum(self.visibles, axis=1) > 2
-            frames = np.array([i for i in range(self.video_data.shape[0])])
 
             file_name = os.path.join(folder_selected, 'roi.png')
             count = 1
@@ -283,7 +333,7 @@ class App:
                 else:
                     break
             
-            draw_roi_plot(frames, self.roi, self.visibles, file_name)
+            draw_roi_plot(self.frame_indices, self.roi, self.visibles, file_name)
             self.in_progress.grid_remove()
             self.button_save_scatter.configure(bg='#5ced73', fg='black', text='Scatter saved', state='disabled')
 
@@ -337,17 +387,19 @@ class App:
             self.canvas.grid_remove()
             self.process_button.grid_remove()
             self.clear_button.grid_remove()
+            self.jump_container.grid_remove()
 
             self.canvas.unbind("<ButtonPress-1>")
             self.canvas.unbind("<B1-Motion>")
             self.canvas.unbind("<ButtonRelease-1>")
+            self.canvas.configure(width=self.video_data.shape[2], height=self.video_data.shape[1])
             
             self.progress_bar.grid()
             self.progress_label.grid()
             self.progress_bar['value'] = 0
-            self.progress_label.config(text=f"Processed frames 0/{self.video_data.shape[0]}",
-                                        bg=self.root.cget('bg'),
-                                        fg='white')
+            self.progress_label.config(text=f"Processed frames 0/{(self.video_data.shape[0] - self.start_frame_idx)}",
+                                       bg=self.root.cget('bg'),
+                                       fg='white')
             x = (self.root.winfo_screenwidth() // 2) - ((500) // 2)
             y = (self.root.winfo_screenheight() // 3) - ((200) // 2)
             self.root.geometry(f"500x200+{x}+{y}")
