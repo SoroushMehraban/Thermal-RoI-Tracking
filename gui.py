@@ -72,6 +72,7 @@ class App:
         n_frames = video.num_frames
         self.video_data = np.zeros((n_frames, height, width))
 
+        self.date_time = []
         for i in range(n_frames):
             self.progress_bar['value'] = (i + 1) / n_frames * 100
             self.progress_label.config(text=f"Reading frame {i + 1}/{n_frames}",
@@ -80,6 +81,7 @@ class App:
             self.root.update_idletasks()  # Update the GUI to reflect progress
 
             video.get_frame(i)
+            self.date_time.append(video.frame_info.time)
             self.video_data[i] = np.array(video.final, copy=False).reshape((height, width))
         
         self.progress_label.grid_remove()
@@ -276,10 +278,11 @@ class App:
             self.in_progress.grid()
 
             if not hasattr(self, 'roi'):
-                self.roi = extract_roi_values(self.video_data, self.tracks)
+                self.roi = extract_roi_values(self.video_data, self.tracks, self.start_frame_idx)
                 self.visibles = np.sum(self.visibles, axis=1) > 2
             df = pd.DataFrame({
                 'Frame': self.frame_indices,
+                'Date-time': self.date_time[self.start_frame_idx:],
                 'RoI': self.roi,
                 'Visible': self.visibles
             })
