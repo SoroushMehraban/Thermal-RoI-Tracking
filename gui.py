@@ -85,7 +85,7 @@ class App:
         video.unit = fnv.Unit.TEMPERATURE_FACTORY
         height = video.height
         width = video.width
-        n_frames = 6000
+        n_frames = video.num_frames
         self.video_data = np.zeros((n_frames, height, width))
 
         self.date_time = []
@@ -355,10 +355,12 @@ class App:
             if not hasattr(self, 'roi'):
                 self.roi = extract_roi_values(self.video_data, self.tracks, self.start_frame_idx)
                 self.visibles = np.sum(self.visibles, axis=1) > 2
+            
             df = pd.DataFrame({
-                'Frame': self.frame_indices[self.visibles],
-                'Date-time': np.array(self.date_time[self.start_frame_idx:])[self.visibles],
-                'RoI': self.roi[self.visibles]
+                'Frame': self.frame_indices,
+                'Date-time': self.date_time[self.start_frame_idx:],
+                'visibles': self.visibles,
+                'RoI': [roi_val if bool(visible) is True else "" for roi_val, visible in zip(self.roi, self.visibles)]
             })
             file_name = os.path.join(folder_selected, 'out.xlsx')
             count = 1
