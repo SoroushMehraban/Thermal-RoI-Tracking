@@ -15,10 +15,26 @@ from model_utils import inference, convert_points_to_query_points, model, device
 
 
 def validate_integer(P):
-    if P.isdigit() or P == "":
+    if P == "":
         return True
-    else:
-        return False
+    elif P.isdigit():
+        if int(P) > 0:
+            return True
+    return False
+    
+
+def validate_float(P):
+    try:
+        val = float(P)
+        if val > 0:
+            return True
+        else:
+            return False
+    except ValueError:
+        if P == "":
+            return True
+        else:
+            return False
             
 
 class App:
@@ -69,7 +85,7 @@ class App:
         video.unit = fnv.Unit.TEMPERATURE_FACTORY
         height = video.height
         width = video.width
-        n_frames = video.num_frames
+        n_frames = 6000
         self.video_data = np.zeros((n_frames, height, width))
 
         self.date_time = []
@@ -113,23 +129,48 @@ class App:
                                    bd=3, relief='raised')
         self.process_button.grid(row=2, column=0, padx=100, sticky="ew")
 
-        vcmd = (self.root.register(validate_integer), '%P')
+        vcmd_int = (self.root.register(validate_integer), '%P')
+        vcmd_float = (self.root.register(validate_float), '%P')
 
+        # Frame jump 
         self.jump_container = tk.Frame(self.root)
         self.jump_container.grid(row=3, column=0, padx=100, sticky="ew")
 
-        self.entry_label = tk.Label(self.jump_container, text=f"Frame: (0-{self.video_data.shape[0] - 1})",  bg=self.root.cget('bg'),
+        self.radius_x_label = tk.Label(self.jump_container, text=f"Frame: (0-{self.video_data.shape[0] - 1})",  bg=self.root.cget('bg'),
                                    fg='White', font=('Helvetica', 12, 'bold'))
-        self.entry_label.pack(side="left")
+        self.radius_x_label.pack(side="left")
         
-        self.integer_entry = tk.Entry(self.jump_container, font=('Helvetica', 12), validate='key', validatecommand=vcmd)
-        self.integer_entry.insert(0, "0")
-        self.integer_entry.pack(side="left", fill="x", expand=True)
+        self.jump_integer_entry = tk.Entry(self.jump_container, font=('Helvetica', 12), validate='key', validatecommand=vcmd_int)
+        self.jump_integer_entry.insert(0, "0")
+        self.jump_integer_entry.pack(side="left", fill="x", expand=True)
 
         self.jump_button = tk.Button(self.jump_container, text="Jump", command=self.jump_frame,
                                      bg='#FFD500', fg='black', font=('Helvetica', 12, 'bold'),
                                      bd=3, relief='raised')
         self.jump_button.pack(side="left")
+
+        # Draw fixed area
+        self.draw_fixed_container = tk.Frame(self.root)
+        self.draw_fixed_container.grid(row=4, column=0, padx=100, sticky="ew")
+
+        self.radius_x_label = tk.Label(self.draw_fixed_container, text=f"Radius X: ",  bg=self.root.cget('bg'),
+                                   fg='White', font=('Helvetica', 12, 'bold'))
+        self.radius_x_label.pack(side="left")
+
+        self.radius_x_entry = tk.Entry(self.draw_fixed_container, font=('Helvetica', 12), validate='key', validatecommand=vcmd_float)
+        self.radius_x_entry.pack(side="left", fill="x", expand=True)
+
+        self.radius_y_label = tk.Label(self.draw_fixed_container, text=f"Radius Y: ",  bg=self.root.cget('bg'),
+                                   fg='White', font=('Helvetica', 12, 'bold'))
+        self.radius_y_label.pack(side="left")
+
+        self.radius_y_entry = tk.Entry(self.draw_fixed_container, font=('Helvetica', 12), validate='key', validatecommand=vcmd_float)
+        self.radius_y_entry.pack(side="left", fill="x", expand=True)
+
+        self.draw_fixed_button = tk.Button(self.draw_fixed_container, text="Draw", command=self.draw_fixed_oval,
+                                     bg='#FFD500', fg='black', font=('Helvetica', 12, 'bold'),
+                                     bd=3, relief='raised')
+        self.draw_fixed_button.pack(side="left")
 
         # First frame display
         self.start_frame_idx = 0
@@ -149,6 +190,9 @@ class App:
         self.image_on_canvas = self.canvas.create_image(0, 0, image=self.photo, anchor=tk.NW)
         
         self.current_oval = None
+        self.radius_x_text = None
+        self.radius_y_text = None
+        self.canvas_mode = 'draw'
         # Bind mouse events
         self.canvas.bind("<ButtonPress-1>", self.on_canvas_button_press)
         self.canvas.bind("<B1-Motion>", self.on_canvas_mouse_drag)
@@ -164,9 +208,39 @@ class App:
         y = (self.root.winfo_screenheight() // 2) - ((canvas_height + button_heights + 200) // 2)
         self.root.geometry(f"{canvas_width+200}x{canvas_height + button_heights + 200}+{x}+{y}")
     
+    def draw_fixed_oval(self):
+        center_x = self.canvas.winfo_width() / 2
+        center_y = self.canvas.winfo_height() / 2
+
+        self.fixed_radius_x = float(self.radius_x_entry.get())
+        self.fixed_radius_y = float(self.radius_y_entry.get())
+
+        if self.fixed_radius_x > center_x:
+            self.fixed_radius_x = center_x
+        if self.fixed_radius_y > center_y:
+            self.fixed_radius_y = center_y
+
+        self.oval_start_x = center_x - self.fixed_radius_x
+        self.oval_end_x = center_x + self.fixed_radius_x
+        self.oval_start_y = center_y - self.fixed_radius_y
+        self.oval_end_y = center_y + self.fixed_radius_y
+
+        if self.current_oval:
+            self.canvas.delete(self.current_oval)
+        if self.radius_x_text:
+            self.canvas.delete(self.radius_x_text)
+        if self.radius_y_text:
+            self.canvas.delete(self.radius_y_text)
+
+        self.current_oval = self.canvas.create_oval(self.oval_start_x, self.oval_start_y, self.oval_end_x, self.oval_end_y, outline='red')
+        self.radius_x_text = self.canvas.create_text(10, 10, anchor='nw', text=f"Radius X: {self.fixed_radius_x:.2f}", fill="red")
+        self.radius_y_text = self.canvas.create_text(10, 30, anchor='nw', text=f"Radius Y: {self.fixed_radius_y:.2f}", fill="red")
+
+        self.canvas_mode = 'move'
+
     def jump_frame(self):
         try:
-            value = int(self.integer_entry.get())
+            value = int(self.jump_integer_entry.get())
             if value > self.video_data.shape[0] - 1:
                 print(f"[ERROR] Value is larger than max frames ({self.video_data.shape[0] - 1})")
 
@@ -190,6 +264,7 @@ class App:
         if self.current_oval:
             self.canvas.delete(self.current_oval)
             self.current_oval = None
+        self.canvas_mode = "draw"
     
     def track_points(self, POINTS):
         resize_height, resize_width = 256, 256
@@ -281,10 +356,9 @@ class App:
                 self.roi = extract_roi_values(self.video_data, self.tracks, self.start_frame_idx)
                 self.visibles = np.sum(self.visibles, axis=1) > 2
             df = pd.DataFrame({
-                'Frame': self.frame_indices,
-                'Date-time': self.date_time[self.start_frame_idx:],
-                'RoI': self.roi,
-                'Visible': self.visibles
+                'Frame': self.frame_indices[self.visibles],
+                'Date-time': np.array(self.date_time[self.start_frame_idx:])[self.visibles],
+                'RoI': self.roi[self.visibles]
             })
             file_name = os.path.join(folder_selected, 'out.xlsx')
             count = 1
@@ -391,6 +465,7 @@ class App:
             self.process_button.grid_remove()
             self.clear_button.grid_remove()
             self.jump_container.grid_remove()
+            self.draw_fixed_container.grid_remove()
 
             self.canvas.unbind("<ButtonPress-1>")
             self.canvas.unbind("<B1-Motion>")
@@ -410,19 +485,105 @@ class App:
     def on_canvas_button_press(self, event):
         self.start_x = event.x
         self.start_y = event.y
-        if self.current_oval:
+        if self.current_oval and self.canvas_mode == 'draw':
             self.canvas.delete(self.current_oval)
             self.current_oval = None
+        if self.radius_x_text:
+            self.canvas.delete(self.radius_x_text)
+            self.radius_x_text = None
+        if self.radius_y_text:
+            self.canvas.delete(self.radius_y_text)
+            self.radius_y_text = None
 
     def on_canvas_mouse_drag(self, event):
-        if self.current_oval:
+        if self.current_oval and self.canvas_mode == 'draw':
             self.canvas.delete(self.current_oval)
-        self.current_oval = self.canvas.create_oval(self.start_x, self.start_y, event.x, event.y, outline='red')
+        if self.radius_x_text:
+            self.canvas.delete(self.radius_x_text)
+        if self.radius_y_text:
+            self.canvas.delete(self.radius_y_text)
+
+        if self.canvas_mode == "draw":
+            radius_x = np.abs((event.x - self.start_x)) / 2
+            radius_y = np.abs((event.y - self.start_y)) / 2
+            self.current_oval = self.canvas.create_oval(self.start_x, self.start_y, event.x, event.y, outline='red')
+        else:
+            radius_x = self.fixed_radius_x
+            radius_y = self.fixed_radius_y
+
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
+            
+            offset_x = event.x - self.start_x
+            offset_y = event.y - self.start_y
+
+            self.start_x = event.x
+            self.start_y = event.y
+
+            within_frame = self.oval_end_x + offset_x < canvas_width \
+                           and self.oval_end_y + offset_y < canvas_height \
+                           and self.oval_start_x + offset_x > 0 \
+                           and self.oval_start_y + offset_y > 0
+            if within_frame:
+                self.oval_start_x += offset_x
+                self.oval_start_y += offset_y
+                self.oval_end_x += offset_x
+                self.oval_end_y += offset_y
+                
+                self.canvas.delete(self.current_oval)
+                self.current_oval = self.canvas.create_oval(self.oval_start_x,
+                                                            self.oval_start_y,
+                                                            self.oval_end_x, 
+                                                            self.oval_end_y, 
+                                                            outline='red')
+                
+
+        self.radius_x_text = self.canvas.create_text(10, 10, anchor='nw', text=f"Radius X: {radius_x:.2f}", fill="red")
+        self.radius_y_text = self.canvas.create_text(10, 30, anchor='nw', text=f"Radius Y: {radius_y:.2f}", fill="red")
 
     def on_canvas_button_release(self, event):
-        if self.current_oval:
+        if self.current_oval and self.canvas_mode == 'draw':
             self.canvas.delete(self.current_oval)
-        self.current_oval = self.canvas.create_oval(self.start_x, self.start_y, event.x, event.y, outline='red')
+        if self.radius_x_text:
+            self.canvas.delete(self.radius_x_text)
+        if self.radius_y_text:
+            self.canvas.delete(self.radius_y_text)
+
+        if self.canvas_mode == "draw":
+            radius_x = np.abs((event.x - self.start_x)) / 2
+            radius_y = np.abs((event.y - self.start_y)) / 2
+            self.current_oval = self.canvas.create_oval(self.start_x, self.start_y, event.x, event.y, outline='red')
+        else:
+            radius_x = self.fixed_radius_x
+            radius_y = self.fixed_radius_y
+
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
+            
+            offset_x = event.x - self.start_x
+            offset_y = event.y - self.start_y
+
+            within_frame = self.oval_end_x + offset_x < canvas_width \
+                           and self.oval_end_y + offset_y < canvas_height \
+                           and self.oval_start_x + offset_x > 0 \
+                           and self.oval_start_y + offset_y > 0
+            if within_frame:
+                self.oval_start_x += offset_x
+                self.oval_start_y += offset_y
+                self.oval_end_x += offset_x
+                self.oval_end_y += offset_y
+                
+                self.canvas.delete(self.current_oval)
+                self.current_oval = self.canvas.create_oval(self.oval_start_x,
+                                                            self.oval_start_y,
+                                                            self.oval_end_x, 
+                                                            self.oval_end_y, 
+                                                            outline='red')
+            
+
+        self.radius_x_text = self.canvas.create_text(10, 10, anchor='nw', text=f"Radius X: {radius_x:.2f}", fill="red")
+        self.radius_y_text = self.canvas.create_text(10, 30, anchor='nw', text=f"Radius Y: {radius_y:.2f}", fill="red")
+
 
     def open_file(self):
         filepath = filedialog.askopenfilename()
